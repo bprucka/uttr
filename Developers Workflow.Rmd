@@ -1,0 +1,465 @@
+---
+title: "uttR Developers Workflow"
+author: "Kaitlin Cornwell"
+date: "August 16, 2018"
+output:
+  html_document: default
+---
+
+```{r setup, include = FALSE}
+# required packages to run visNetwork examples
+library(visNetwork)
+library(igraph)
+library(dplyr)
+```
+
+# Overview
+
+uttR follows a pipeline consisting of 3 steps: 
+
+1. Define the model (without a data set or outcome)
+2. Fit the model (apply to a data set and decide the framework)
+3. Conduct follow-up or create output
+
+```{r pipeline, echo = FALSE}
+set.seed(5)
+nodes <- data.frame(id = c("make_model", "fit_model", "follow_up"))
+edges <- data.frame(from = c("make_model", "fit_model"), 
+                    to = c("fit_model", "follow_up"))
+nodes$label <- c("make_model", "fit_model", "follow_up")
+nodes$group <- c("make", "fit", "followup")
+nodes$level <- c(1, 2, 3)
+visNetwork(nodes, edges) %>%
+  visEdges(arrows = "to") %>%
+  visHierarchicalLayout(direction = "LR")
+```
+
+There are main functions that carry out each of these steps. A user begins by making a model (this is carried out through the `make_distribution()` functions) and defining any priors. Next, users fit the model using the `fit_model()` function, which deploys S3 methods to carry out the fitting. Lastly, the user can conduct any follow-up analysis. Currently supported follow-up procedures include prediction, simulation (frequentist only), and graphing (frequentist only). 
+
+```{r pipeline expanded, echo = FALSE}
+set.seed(5)
+nodes <- data.frame(id = c("make_model", "set_priors", "fit_model", "do_simulation", "do_prediction", "graph_distribution", "combine_plots"))
+edges <- data.frame(from = c("make_model", "set_priors", "make_model", "fit_model", "fit_model", "fit_model", "graph_distribution"), to = c("set_priors", "fit_model", "fit_model", "do_simulation", "do_prediction", "graph_distribution", "combine_plots"))
+nodes$label <- c("make_model", "set_priors", "fit_model", "do_simulation", "do_prediction", "graph_distribution", "combine_plots")
+nodes$group <- c("make", "make", "fit", "followup", "followup", "followup", "followup")
+nodes$level <- c(1, 1, 2, 3, 3, 3, 4)
+nodes$x <- c(300, 380, 300, 200, 300, 400, 400)
+nodes$y <- c(0, 250, 500, 1000, 1000, 1000, 1500)
+
+visNetwork(nodes, edges) %>%
+  visEdges(arrows = "to") %>%
+  visIgraphLayout(layout = "layout_nicely")
+```
+
+# Step 1 - Make Model
+
+### make_distribution
+
+Below is a diagram listing the functions provided for the steps in creating a model. These functions all take in a list of predictors (as well as a name of a distribution for `make_distribution()`) and return a tibble containing the name of the distribution and the right hand side of a model equation which has been defined as a linear combination of the given predictors.
+
+Note: There is no `make_model()` function - in this diagram it is simply used as a reference to connect the `make_distribution()` functions to their respective parts within the uttR framework.
+
+```{r make_distribution, echo = FALSE}
+set.seed(5)
+nodes <- data.frame(id = c("make_model", "make_binom", "make_pois", 
+                           "make_distribution", "make_negbinom", "make_betabinom"),
+                    label = c("make_model", "make_binom", "make_pois",
+                              "make_distribution", "make_negbinom", "make_betabinom"),
+                    level = c(2, rep(1, 5)))
+edges <- data.frame(from = rep("make_model", 5), to = nodes$id[-1])
+visNetwork(nodes, edges) %>%
+  visHierarchicalLayout()
+
+```
+
+### set_priors()
+
+If a user will be fitting a Bayesian model they must also set the priors for each predictor in the model, including the intercept. This is done using the `set_priors()` function. The function takes in a comma separated list of expressions in the form of `variable = prior` where the prior is written in JAGS notation.
+
+`set_priors()`: 
+
+* Takes in a tibble returned from the `make_model` functions and a comma separated list of expressions of the form `variable = prior`
+* Enquotes the list of priors
+* Checks that a prior was given for the intercept of the model
+* Appends a column of set priors to a tibble for each model using `set_individual_priors()`
+* Returns the tibble
+
+`set_individual_priors()`:
+
+* Checks that no additional priors were given for variables not in the model (uses the `get_predictors()` function to get a list of predictors in the model to compare priors to)
+* Creates a named list of the priors
+* Changes the `=` sign to a `~` for use within the JAGS code when fitting the model.
+
+
+```{r set_priors, echo = FALSE}
+nodes = data.frame(id = c("set_priors", "set_individual_priors", "get_predictors"),
+                   label = c("set_priors", "set_individual_priors", "get_predictors"),
+                   level = c(1, 2, 3))
+edges = data.frame(from = c("set_priors", "set_individual_priors"),
+                   to = c("set_individual_priors", "get_predictors"))
+visNetwork(nodes, edges) %>%
+  visEdges(arrows = "to") %>%
+  visHierarchicalLayout(direction = "LR")
+```
+
+
+
+# Step 2 - fit_model
+
+The next step of the pipeline is to fit the specified model(s). The `fit_model()` function takes in a tibble returned from the make_model step and fits the specified model(s) using classed methods.
+
+Class hierarchy is as follows:
+
+```{r classes, echo = FALSE}
+set.seed(5)
+nodes <- data.frame(id = c("Binomial", "Binomial.Frequentist", "Binomial.Bayesian", "Binomial.Randomforest", "Poisson", "Poisson.Frequentist", "BetaBinomial", "BetaBinomial.Frequentist", "NegativeBinomial", "NegativeBinomial.Frequentist"),
+                    label = c("Binomial", "Binomial.Frequentist", "Binomial.Bayesian", "Binomial.Randomforest", "Poisson", "Poisson.Frequentist", "BetaBinomial", "BetaBinomial.Frequentist", "NegativeBinomial", "NegativeBinomial.Frequentist"),
+                    group = c(1, 1, 1, 1, 2, 2, 3, 3, 4, 4),
+                    level = c(1, 2, 2, 2, 1, 2, 1, 2, 1, 2))
+edges <- data.frame(from = c("Binomial", "Binomial", "Binomial", "Poisson", "BetaBinomial", "NegativeBinomial"),
+                    to = c("Binomial.Frequentist", "Binomial.Bayesian", "Binomial.Randomforest", "Poisson.Frequentist", "BetaBinomial.Frequentist", "NegativeBinomial.Frequentist"))
+visNetwork(nodes, edges) %>%
+  visEdges(arrows = "to") %>%
+  visHierarchicalLayout()
+```
+
+Once `fit_model()` is called it goes through 2 main steps:
+
+1. Construct the object
+2. Fit the object
+
+### Construct the object
+
+To construct the object that will be fit, a constructor is called. This is also where model options are set. The specific constructors search for keywords in the output from the `model_options()` function. The constructor then adds the options to the model options by searching for distribution specific names within the list returned from `model_options()`.
+
+`model_options()`:
+
+* Takes in a list of expressions given as `option = value`
+* Creates a named list of the options in the form of `list$option = value`
+* Returns the list to the constructor for parsing
+
+`distribution.fit` - S3 class constructor:
+
+* Takes in a tibble from `make_model` step, the type of fit to be used in the form of an expression (either `frequentist`, `bayesian`, or `randomforest`), the outcome variable to be used in the form of an expression, if provided by the user the grouping variable to be used in the form of an expression, and any model options as received from the `model_options()` function
+* Forms an object of type `distribution.fit`
+* Sets any model options by matching names in the list returned from `model_options()` to a pre-specified list of valid options for the given model
+* Returns the classed object
+
+
+```{r constructor, echo = FALSE}
+nodes = data.frame(id = c(1, 2),
+                   label = c("model_options", "constructor"),
+                   level = c(1, 2))
+edges = data.frame(from = c(1),
+                   to = c(2))
+visNetwork(nodes, edges) %>%
+  visIgraphLayout(layout = "layout_nicely") %>%
+  visEdges(arrows = "to") %>%
+  visHierarchicalLayout(direction = "LR")
+```
+
+### Fit Object
+
+Once the object has been constructed, the object is fit using the associated S3 method for `fit_object()`. Additionally, the result of the fit gets developed into an S3 class called `model_results` using the `as_result()` function.
+
+`fit_object.distribution.Frequentist()`:
+
+* Updates the model equation as necessary
+  + e.g. if a maximum number of trials is given for a binomial model it updates the model equation used in the fit to `c(outcome, max - outcome) ~ RHS`
+* Groups the data
+* Fits the glm via `stats::glm()` or `VGAM::vglm()`
+* Creates an object of class `model_results` that contains the glm or vglm fit object and the data set
+* Adds additional model information to the tibble
+* Returns the `model_results` object to the function `fit_model()`
+
+`fit_object.distribution.Bayesian()`:
+
+* Creates the JAGS code needed using the function `create_jags_code()`
+* Subsets the data to include only the outcome, specified predictors, and grouping variable
+* Groups the data
+* Runs `rjags::jags.model()`
+* Runs the burn in period through `jags::update()`
+* Gets the JAGS samples using `jags::coda.samples()`
+* Creates an object of class `model_results` that contains the mcmc.list object and the dataset
+* Adds additional model information to the tibble
+* Returns the `model_results` object to the function `fit_model()`
+
+`fit_object.distribution.Randomforest()`:
+
+* Checks that an intercept only model is not being fit
+* Subsets the data to only include the outcome, specified predictors, and grouping variable
+* Updates the formula if running a classification model to include `as.factor(outcome)`
+* Groups the data
+* Sets options for the random seed and maximum number of nodes
+* Runs the random forest via `randomForest::randomForest()`
+* Creates an object of class `model_results` that contains the randomForest fit object and the data set
+* Adds additional model information to the tibble
+* Returns the developed tibble to the function `fit_model()`
+
+`create_jags_code()`:
+
+* Writes the likelihood section of the JAGS code using `make_likelihood()`
+  + `make_likelihood()` is an S3 method corresponding to the appropriate method for `make_likelihood.distribution.Bayesian`
+    + Writes the string for the final outcome
+    + Gets a list of all predictors within the model using `get_predictors()`
+    + Adds the string `beta_` to each of the predictors to create the variables for use as the coefficients in the model
+    + Writes the model equation by creating a linear combination of `beta_predictor * predictor[i]` for each predictor in the model
+    + Adds the model equation outcome
+    + Combines the strings for the final outcome and model equation
+    + Returns the created string representing the likelihood portion of the Bayesian model to `create_jags_code()`
+* Writes the priors section of the JAGS code using `make_prior()`
+  + `make_prior()`
+    + Takes in a tibble of the set priors
+    + Appends `beta_` to each of the predictor variable names
+    + Creates a string of all of the priors separated by a new line
+    + Returns the prior section of Bayesian model to `create_jags_code()`
+* Puts the likelihood and prior section of the Bayesian model together with necessary new lines and for loops needed to run JAGS
+
+The workflow for the `fit_object()` function is as follows:
+```{r fit_model, echo = FALSE}
+set.seed(30)
+nodes <- data.frame(id = c("fit_object", "as_result", "get_predictors_randomforest", "create_jags_code", "make_prior", "make_likelihood", "get_predictors_bayesian"),
+                    label = c("fit_object", "as_result", "get_predictors", "create_jags_code", "make_prior", "make_likelihood", "get_predictors"),
+                    group = c("All", "All", "Random Forest", "Bayesian", "Bayesian", "Bayesian", "Bayesian"),
+                    x = c(250, 100, 300, 600, 500, 700, 900),
+                    y = c(0, 100, 200, 200, 400, 500, 550))
+edges <- data.frame(from = c("fit_object", "fit_object", "create_jags_code", "create_jags_code", "make_likelihood", "fit_object"), 
+                    to = c("as_result", "create_jags_code", "make_prior", "make_likelihood", "get_predictors_bayesian", "get_predictors_randomforest"))
+visNetwork(nodes, edges) %>%
+  visIgraphLayout(layout = "layout_nicely") %>%
+  visEdges(arrows = "to") %>%
+  visLegend
+```
+
+### Putting model construction and fit together
+
+The final result is a function call that follows the following workflow - beginning with `fit_model()`:
+
+```{r construction and fit, echo = FALSE}
+nodes <- data.frame(id = 1:10,
+                    label = c("fit_model", "constructor", "model_options", "fit_object", "as_result", "get_predictors", "create_jags_code", "make_prior", "make_likelihood", "get_predictors"),
+                    group = c("All", "All", "All", "All", "All", "Random Forest", "Bayesian", "Bayesian", "Bayesian", "Bayesian"),
+                    x = c(500, 0, 150, 500, 700, 250, 500, 700, 300, 0),
+                    y = c(0, 0, 150, 300, 300, 300, 500, 700, 700, 700))
+edges <- data.frame(from = c(1, 1, 1, 4, 4, 4, 7, 7, 9),
+                    to = c(3, 2, 4, 5, 6, 7, 8, 9, 10))
+visNetwork(nodes, edges) %>%
+  visIgraphLayout(layout = "layout_nicely") %>%
+  visEdges(arrows = "to") %>%
+  visLegend()
+```
+
+# Step 3 - Follow-up analysis
+
+The final step within the pipeline is to complete any follow-up analysis. These functions take in the results of `fit_model()` and any additional options.
+
+The supported follow-up functions are: 
+
+* Prediction
+* Simulation
+* Graphing distributions
+
+### do_prediction
+
+The `do_prediction()` function will predict values based on the fit model(s). It will either predict the data set that the model was fit to, or a new data set supplied by the user. 
+
+Methods implemented for `do_prediction()`:
+
+* Binomial.Frequentist
+* Binomial.Bayesian
+* Binomial.Randomforest
+* Poisson.Frequentist
+* NegativeBinomial.Frequentist
+* BetaBinomial.Frequentist
+
+Note: Although the link function for the inverse transformation is the same within each type of model (binomial, Poisson, negative binomial, and beta binomial), the way that each value is returned from `model_prediction()` may differ, making the method specific to not only the distribution but the fit type.
+
+`do_prediction()`: 
+
+* Takes in a tibble of model fits from `fit_model()` and an optional data.frame or tibble of values to predict at
+* Constructs a classed object of type `distribution.fit` (see `constructor:` in [Construct the object])
+* Carries out the prediction through the S3 method `model_prediction()`
+* Carries out the inverse transformation of the outcome through the S3 method `inv_transformation()`
+* Reformats tibble to contain relevant model information
+* Returns the tibble
+
+`model_prediction.distribution.fit`:
+
+* Takes in an S3 object of type `distribution.fit`, the S3 object of type `model_results` associated with the model, an id value, and a data.frame or tibble of the values in which to predict at
+* Gets a list of predictors using `get_predictors()`
+* Constructs the new data set if the user did not supply one
+* Predicts the given values in the data set
+  + for frequentist fits prediction is done via `stats::predict.glm()` or `vgam::predictvglm()`
+  + for Bayesian fits prediction is done by taking the MCMC list, multiplying each value by the data that is to be predicted, summing these values to create a final result value for each iteration of the chain, then averaging over all values of the chain to get a final predicted value
+  + for random forest fits prediction is done via `randomForest::predict()`
+* Adds relevant model and identifier information to the tibble
+* Returns the tibble containing predicted values
+
+`inv_transformation.distribution.fit`:
+
+* Takes in an S3 object of type `distribution.fit`, the predicted value from `model_prediction()`, an id for the model the predicted value came from, and the new values to be predicted
+* Performs the inverse transformation (if necessary)
+* Returns a tibble containing the transformed value and necessary model information
+
+The workflow for `do_prediction()` is as follows: 
+
+```{r do_prediction, echo = FALSE}
+set.seed(5)
+nodes <- data.frame(id = 1:5,
+                    label = c("do_prediction", "constructor", "model_prediction", "get_predictors", "inv_transformation"), 
+                    group = c("General Function", "Method", "Method", "General Function", "Method"),
+                    x = c(500, 0, 500, 500, 1000),
+                    y = c(0, 300, 300, 600, 300))
+edges <- data.frame(from = c(1, 1, 3, 1),
+                    to = c(2, 3, 4, 5))
+visNetwork(nodes, edges) %>%
+  visIgraphLayout() %>%
+  visLegend %>%
+  visEdges(arrows = "to")
+```
+
+### do_simulation
+
+Users can also simulate data based on their fit model(s). This simulation occurs by first predicting the values, then simulating from the appropriate distribution.
+
+Methods implemented for `do_simulation()`:
+
+* Binomial.Frequentist
+* Poisson.Frequentist
+* NegativeBinomial.Frequentist
+* BetaBinomial.Frequentist
+
+`do_simulation()`:
+
+* Takes in fit models from `fit_model()`, a data.frame or tibble of new data, the number of data sets to simulate and a random seed
+* Constructs a classed object of type `distribution.fit` (see `constructor` in [Construct the object])
+* Predicts values using `model_prediction()` (see `model_prediction.distribution.fit` in [do_prediction])
+* Simulates values using the predicted values as parameters for the appropriate distributions using `simulate_distribution()`
+* Adds relevant model information to the tibble
+* Returns the tibble
+
+`simulate_distribution.distribution.fit`:
+
+* Takes in an S3 object of class `distribution.fit`, the `model_results` object from the fit model, any user supplied values to simulate at, the number of data sets to simulate, and a random seed
+* Gets any necessary information from the model
+  + e.g. the total number of trails for a binomial model if the user supplied a vector of successes instead of 0/1
+* Takes the inverse transformation of the predicted values
+* Simulates values from the appropriate distribution using the transformed predicted values as parameters
+* Adds the data set that values were predicted from to the tibble
+* Returns the tibble to `do_simulation()`
+
+
+The workflow for `do_simulation()` is as follows: 
+
+```{r do_simulation, echo = FALSE}
+nodes <- data.frame(id = 1:5,
+                    label = c("do_simulation", "constructor", "model_prediction" ,"get_predictors", "simulate_distribution"),
+                    group = c("General Function", "Method", "Method", "General Function", "Method"),
+                    x = c(500, 0, 500, 500, 1000),
+                    y = c(0, 300, 300, 600, 300))
+edges <- data.frame(from = c(1, 1, 3, 1),
+                    to = c(2, 3, 4, 5))
+visNetwork(nodes, edges) %>%
+  visIgraphLayout() %>%
+  visEdges(arrows = "to") %>%
+  visLegend
+```
+
+### Graphing
+
+The final supported process for the pipeline is graphing. Graphing can be done in two steps - graphing each distribution individually, and graphing all distributions overlaid onto one graph. If a grouping variable is set, then separate graphs are made for each group when graphing the distributions together. Additionally, there is an option for a histogram of the original data to be displayed behind the distributions. 
+
+The function `plot_distribution()` is called first to graph each distribution separately. If the user then wants to combine all of the plots, the `combine_plots()` function takes in the output from `plot_distribution()` and returns a plot with all of the distributions. 
+
+Note: If a user wants a histogram to be displayed on their combined plot it must also be included in their individual plots. 
+
+`plot_distribution()`:
+
+* Takes in fit models from `fit_model()` and a logical indicating whether a histogram of the original data should be overlaid on the graph
+* Constructs a classed object of type `distribution.fit` (see `constructor:` in [Construct the object])
+* Calls the S3 method `model_distribution()` to create the ggplot object
+* Adds relevant model information to the tibble
+* Returns the tibble
+
+`combine_plots()`:
+
+* Takes in the tibble returned by `plot_distribution()` and a logical indicating whether a histogram of the original data should be overlaid on the graph
+* Creates a data set by extracting the data elements from the ggplots within the tibble produced by `plot_distribution()`
+* Updates the ids that are to be displayed in the legend if there is a grouping variable
+* Creates the column that will be used in the legend with the form `id - distribution`
+* Plots histogram if needed
+* Plots distributions 
+* Returns the ggplot object
+
+`model_distribution.distribution.fit`:
+
+* Takes in an S3 object of class `distribution.fit`, the results of the fit model, an id variable, and a logical indicating whether a histogram of the original data should be displayed
+* Gets any necessary information from the model to parameterize the distribution
+* Gets the bounds of the x axis
+* Creates the tibble containing the x values, density values of the distribution, and id of model to be used for graphing
+* Plots histogram if needed
+* Plots distribution
+* Returns the ggplot object
+
+
+The workflow for `plot_distribution()` is as follows:
+
+```{r plot_distribution, echo = FALSE}
+set.seed(5)
+nodes <- data.frame(id = 1:3,
+                    label = c("plot_distribution", "constructor", "model_distribution"),
+                    group = c("General Function", "Method", "Method"),
+                    level = c(1, 2, 2))
+edges <- data.frame(from = c(1, 1),
+                    to = c(2, 3))
+visNetwork(nodes, edges) %>%
+  visIgraphLayout() %>%
+  visEdges(arrows = "to") %>%
+  visHierarchicalLayout() %>%
+  visLegend()
+```
+
+# Final Workflow
+
+Now that each piece has been discussed individually, the final workflow is as follows : 
+
+```{r complete, echo = FALSE}
+nodes <- data.frame(id = 1:31,
+                    label = c("make_binom", "make_pois", "make_betabinom", "make_negbinom",
+                              "make_distribution", "set_priors", "set_individual_priors",
+                              "fit_model", "constructor", "model_options", "fit_object",
+                              "get_predictors", "create_jags_code", "make_prior", "make_likelihood",
+                              "get_predictors", "as_result", "do_prediction", "constructor",
+                              "model_prediction", "get_predictors", "inv_transformation", 
+                              "do_simulation", "constructor", "model_prediction", "get_predictors",
+                              "simulate_distribution", "plot_distribution", "constructor",
+                              "model_distribution", "combine_plots"),
+                    group = c("Function", "Function", "Function", "Function", "Not included",
+                              "Function", "Function", "Function", "Method", "Function", "Method",
+                              "Function", "Function", "Function", "Function", "Function", "Function",
+                              "Function", "Method", "Method", "Function", "Method", "Function",
+                              "Method", "Method", "Function", "Method", "Function", "Method",
+                              "Method", "Method"), 
+                    level = c(1, 1, 1, 1, 2, 2, 2, 
+                              3, 2, 3, 4, 5, 5, 6, 6, 7, 5,
+                              8, 9, 9, 10, 9,
+                              8, 9, 9, 10, 9,
+                              8, 9, 9, 11))
+edges <- data.frame(from = c(1:4, 5, 6, 6, 5,
+                              rep(8, 3), 11, 11, 13, 13, 15, 11,
+                             8, 18, 18, 20, 18,
+                             8, 23, 23, 25, 23,
+                             8, 28, 28, 28),
+                    to = c(rep(5, 4), 6, 7, 8, 8,
+                           9:11, 12, 13, 14, 15, 16, 17,
+                           18, 19, 20, 21, 22,
+                           23, 24, 25, 26, 27,
+                           28, 29, 30, 31))
+visNetwork(nodes, edges) %>%
+  visIgraphLayout() %>%
+  visHierarchicalLayout() %>%
+  visLegend() %>%
+  visEdges(width = 3) %>%
+  visNodes(font = list(size = 25)) %>%
+  visInteraction(zoomView = TRUE, navigationButtons = TRUE)
+```

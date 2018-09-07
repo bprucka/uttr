@@ -1,0 +1,14 @@
+Package: uttR
+Title: Unleashing the Tidyverse - Easy modeling in R
+Version: 0.0.0.9000
+Authors@R: c(person("Kaitlin", "Cornwell", role = c("aut", "cre"), email = "kaitcorn@umich.edu"),
+             person("Bill", "Prucka", role = c("aut"), email = "prucka_william_robert@lilly.com"))
+Maintainer: Kaitlin Cornwell <kaitcorn@umich.edu>
+Description: Allows for fast and intuitive model building in R. 
+Depends: R (>= 3.5.0), dplyr, rlang, purrr, stringr, rjags, glue, VGAM,
+         boot, magrittr, ggplot2, randomForest, tidyr
+License: MIT + file LINCENSE
+Encoding: UTF-8
+LazyData: true
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 6.0.1

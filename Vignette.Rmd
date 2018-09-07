@@ -1,0 +1,206 @@
+---
+title: "uttR Vignette"
+author: "Kaitlin Cornwell"
+date: "August 15, 2018"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+setwd("~/Project Pipeline")
+source("General/Complete Pipeline 7.11.18.R")
+source("Binomial/Binom 7.11.18.R")
+source("Poisson/Pois 7.11.18.R")
+source("Negative Binomial/NegBinom 7.11.18.R")
+source("Beta Binomial/BetaBinom 7.11.18.R")
+```
+
+# Introduction to Lilly's Tidyverse Based Analysis Pipeline
+
+We are always looking for ways to make data manipulation, analysis, and diagnostics easier and more efficient. The tools included in this Tidyverse Pipeline aim to allow users to analyze data in a simple and model-driven fashion. The entensive use of R's Tidyverse (a combination of packages - including dplyr, purrr, and ggplot - that allow for data manipulation and analysis in a simple and continuous fashion) makes model building and data analysis simple and neat.
+
+The pipeline follows the logical structure of analysis: building a model, fitting the model, and then doing any accessory work (including simulations, graphing, diagnostics, etc).
+
+We will be using a simulated dataset, `dt_sim` as an example.
+
+* y - the number of migranes experiences
+* mig - the type of migrane that someone has
+* month - the month in which we are tracking
+* trt - the treatment they have received - either "A", or "B"
+
+```{r}
+# simulate the data
+mig_type <- c("Episodic","Chronic")
+month <- 0:6
+trt <- c("A","B")
+
+# put into the proper structure
+dt_sim <- as_tibble(expand.grid(mig_type,month,trt) %>% 
+                    `colnames<-`(c("mig_type","month","trt"))) %>%
+                    mutate(y=map(mig_type,function(x) {rzinegbin(100,size=30,munb=8,pstr0=0.05)} )) %>% 
+                    unnest() %>% rename(mig = mig_type)
+
+dt_sim
+```
+
+
+## Making a Model
+The `make_distribution()` functions are used to make the initial models. These functions are intended to help setup your future analysis and are to be used to define the predcitors in your model - the outcome will be assigned in a later step.
+
+
+Supported models include: 
+
+* Binoimal: make_binom()
+* Poisson: make_pois()
+* Negative Binomial: make_negbinom()
+* Beta Binomial: make_betabinom()
+
+These functions take in a list of variable names and return a tibble with the given distribution type and the model equation (a linear combination of the given preditors). 
+
+Note: The model equation returned will be of type symbol or language (not character). This is so they can be easily used later when fitting the model.
+
+For example, to make a binomial model with `trt` as your predictor:  
+```{r}
+binom <- make_binom(trt)
+
+binom; binom$model_eq
+```
+
+
+You can also provide multiple predictors to be included in your model.
+```{r}
+pois <- make_pois(trt, month)
+
+pois; pois$model_eq
+```
+
+Additionally, to make an intercept only model, provide the argument `1`.
+```{r}
+negbinom <- make_negbinom(1)
+
+negbinom; negbinom$model_eq
+```
+
+Since the return of these `make_distribution` functions are a tibble, they can be bound together to create a list of potential models.
+```{r}
+mod_tbl <- bind_rows(make_binom(trt), make_pois(trt, month), make_negbinom(1))
+
+mod_tbl; mod_tbl$model_eq
+```
+
+## Fitting a Model
+Once a model has been setup using the `make_distribution` functions, the model can then be fit to a dataset.  
+  
+Using the function `fit_model()`, specify exactly how you would like your model to be fit. This includes the arguments:
+
+* model_array: A tibble containing the models to be fit (the output of the `make_distribution` functions)
+* method: The method you would like to fit your model with - Frequentist, Bayesian, Machine Learning...
+* data: The dataset to be used to fit your model
+* outcome: The outcome you would like to use for your model
+* group: The variable that groups your data - if given the analysis will be run separately for each group. The default is no grouping.
+* opt: Any additional options needed to fit the model given as arguments to the `model_options()` function
+
+For example, to fit an intercept only Poisson model in a frequentist framework:
+```{r}
+mod_1 <- make_pois(1) %>% fit_model(frequentist, dt_sim, y)
+
+mod_1; mod_1$model_results
+```
+
+If you then want to add a grouping by the treatment received:
+```{r}
+mod_2 <- make_pois(1) %>% fit_model(frequentist, dt_sim, y, trt)
+
+mod_2; mod_2$model_results
+```
+
+If you want to fit an intercept only model and a model with the treatment as the predictor for each type of migrane:
+```{r}
+mod_3 <- bind_rows(make_pois(1), make_pois(trt)) %>%
+         fit_model(frequentist, dt_sim, y, mig)
+
+mod_3
+```
+
+For both the binomial distribution and the betabinomial, the outcome can either be a list of 0/1 factors or it can be a vector of success/failures. If your outcome is 0/1 then you can fit the models as shown above. If your outcome is a vector of successes, then you should provide the outcome as usual but use the `opt` argument to specify the maximum number of trials.
+
+For example, in our dataset of migranes, assuming that every month has 30 days the maximum number of trials is 30. So, to fit a binomail distribution we would use the argument `max` within the model_options function:
+```{r}
+mod_4 <- make_binom(1) %>% fit_model(frequentist, dt_sim, y, opt = model_options(max = 30))
+
+mod_4; mod_4$model_results
+```
+
+Each option is specific to the distribution being fit. Since no `max` option is needed to fit a Poisson model, you can give it without any effect.   
+  
+For example, to fit both a Poisson model and a Binomial model at the same time, both grouped by type of migrane:
+```{r}
+mod_5 <- bind_rows(make_pois(trt), make_binom(trt)) %>%
+         fit_model(frequentist, dt_sim, y, mig, model_options(max = 30))
+
+mod_5; mod_5$model_results
+```
+
+By comparison, You could do this using base R in the following way:  
+
+```
+dt_sim_A <- dt_sim[which(dt_sim$mig == "Episodic"),]
+dt_sim_B <- dt_sim[which(dt_sim$mig == "Chronic"),]
+
+glm(y ~ trt, family = poisson, data = dt_sim_A)
+glm(y ~ trt, family = poisson, data = dt_sim_B)
+glm(cbind(y, 30 - y) ~ trt, family = binomial, data = dt_sim_A)
+glm(cbind(y, 30 - y) ~ trt, family = binomial, data = dt_sim_B)
+```
+
+## After fit_model()
+After the models have been fit, there is often a variety of things that people want to do with them.
+
+There have been some supported functions that will work directly with the pipeline.
+
+### Simulations
+The function `do_simulation()` provides a framework to simulate values from every model once they have been fit. The function takes in a tibble produced from `fit_model()` and simulates from the given models. Some additional arguments that can provided include the number of simulations (nsim) and a seed number (seed). `do_simulation()` returns a dataset in long format in which each row is one simulated number from the model. 
+
+```{r}
+make_pois(1) %>% fit_model(frequentist, dt_sim, y) %>% do_simulation()
+```
+
+### Predictions
+The function `do_prediction()` provides a framework to get predictions from every modely once they have been fit. The function takes in a tibble produced from `fit_model()` and uses them to make the predictions. 
+
+Note: Currently, you cannot give values for the model to predict at. The predcitions occur at the mean value of the predictors.
+
+Note: Currently, you cannot use predict when models are stacked. You can only feed in one fit model at a time.
+
+```{r}
+make_binom(1) %>% fit_model(frequentist, dt_sim, y, opt = model_options(max = 30)) %>% do_prediction()
+```
+
+## Bayesian Analysis
+
+```{r}
+library(coastr)
+
+### data read in
+dataPath <- "~/Temp"
+adtte <- import_isilon_data(dataPath,"adtte.sas7bdat")
+adsl <- import_isilon_data(dataPath,"adsl.sas7bdat")
+Analysis <- left_join(adtte,adsl,by=c("USUBJID"="USUBJID")) %>% 
+  filter(SAFFL.x=="Y")
+Analysis$PBACFL <- ifelse(Analysis$PBACFL == "Y", 1, ifelse(Analysis$PBACFL == "N", 0, 99))
+
+```
+
+```{r}
+make_binom(1) %>% set_priors(int = dnorm(0, .01)) %>% fit_model(bayesian, Analysis, PBACFL)
+
+bayes_models <- bind_rows(make_binom(1), make_binom(AVAL)) %>% set_priors(int = dnorm(0, .01), AVAL = dnorm(0, .05))
+bayes_models; bayes_models$priors
+
+bind_rows(make_binom(1), make_binom(AVAL)) %>% 
+  set_priors(int = dnorm(0, .01), AVAL = dnorm(0, .05)) %>%
+  fit_model(bayesian, Analysis, PBACFL)
+```
